@@ -76,7 +76,7 @@ class EvalArgs:
         default_factory=PackedCausalTransformerGeneratorArgs
     )
     harness: Optional[LMHarnessArgs] = field(default_factory=LMHarnessArgs)
-    validation: Optional[ValidationArgs] = field(default_factory=ValidationArgs)
+    validation: Optional[ValidationArgs] = None
 
     wandb: Optional[Any] = None
 
