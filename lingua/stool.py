@@ -166,6 +166,7 @@ def launch_job(args: StoolArgs):
         else:
             print("Operation cancelled.")
             return
+    os.makedirs(os.path.join(dump_dir, "logs"), exist_ok=args.dirs_exists_ok)
     if args.copy_code:
         os.makedirs(f"{dump_dir}/code", exist_ok=args.dirs_exists_ok)
         print("Copying code ...")
@@ -178,7 +179,7 @@ def launch_job(args: StoolArgs):
     conda_exe = os.environ.get("CONDA_EXE", "conda")
     conda_env_path = os.path.dirname(os.path.dirname(args.anaconda))
     log_output = (
-        "-o $DUMP_DIR/logs/%j/%j_%t.out -e $DUMP_DIR/logs/%j/%j_%t.err"
+        "-o $DUMP_DIR/logs/%j_%t.out -e $DUMP_DIR/logs/%j_%t.err"
         if not args.stdout
         else ""
     )
