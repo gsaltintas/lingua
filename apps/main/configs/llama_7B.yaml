@@ -1,5 +1,5 @@
 #python -m lingua.stool config=apps/main/configs/llama2_7B.yaml nodes=32 account=fair_amaia_cw_codegen qos=lowest
-# dump_dir: !!!CHANGE_THIS!!!
+dump_dir: /fsx/craffel/lingua_logs/llama7b_finewebedu/
 name: "7b_baseline"
 steps: 500_000
 grad_acc_steps: 4
@@ -29,7 +29,7 @@ model:
   multiple_of: 256
 
 data:
-  root_dir: data/shuffled
+  root_dir: /scratch/craffel/lingua/data/
   sources:
     dclm_baseline_1.0: 1.0
   batch_size: 2
@@ -39,7 +39,7 @@ data:
   load_async: true
   tokenizer:
     name: tiktoken
-    path: tokenizers/cl_toplang_128k.tiktoken
+    path: /fsx/craffel/lingua/tokenizers/llama3.model
 
 profiling:
   run: true
