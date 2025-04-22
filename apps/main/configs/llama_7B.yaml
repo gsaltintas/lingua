@@ -78,7 +78,9 @@ eval:
       - race
       - commonsense_qa
       # - coqa
-      - copa
+      - task: copa
+        dataset_kwargs:
+          trust_remote_code: true
       - mmlu
       - mmlu_pro
       # - task: nq_open
