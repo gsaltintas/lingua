@@ -7,7 +7,7 @@ grad_acc_steps: 4
 seed: 777
 optim:
   lr: 1.0e-3
-  weight_decay: 0.1
+  weight_decay: 0.2
   warmup: 2000
   lr_min_ratio: 0.000001
   clip: 1.0
