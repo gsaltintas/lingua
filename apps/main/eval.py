@@ -251,7 +251,7 @@ def launch_eval(cfg: EvalArgs):
         val_results = eval_on_val(generator, cfg.validation, train_cfg)
     if get_global_rank() == 0:
         with open(Path(cfg.dump_dir) / "results.json", "w") as f:
-            f.write(json.dumps(results))
+            f.write(json.dumps(results, default=lambda x: str(type(x))))
         logger.info(f"All evaluation results: {results['results']}")
         if val_results is not None:
             with open(Path(cfg.dump_dir) / "validation.json", "w") as f:
