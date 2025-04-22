@@ -53,7 +53,7 @@ checkpoint:
     every: 10000
     keep: -1
   eval:
-    every: 1000
+    every: 2000
     keep: 3
 
 logging:
