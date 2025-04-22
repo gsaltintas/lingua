@@ -414,9 +414,6 @@ def train(args: TrainArgs):
 
             loss = model(input_ids, labels)
 
-            if args.grad_acc_steps > 1:
-                model.set_requires_gradient_sync(train_state.acc_step == 0)
-
             # We scale loss with grad_acc_steps so the gradient is the same
             # regardless of grad_acc_steps
             loss = loss / args.grad_acc_steps
