@@ -59,7 +59,6 @@ class CheckpointArgs:
     eval: SaveEvery = field(default_factory=SaveEvery)
     path: Optional[str] = None
     init_ckpt_path: Optional[str] = None
-    continue_training_from_init: bool = False
 
 
 def _get_key_step(name: str):
@@ -107,7 +106,6 @@ class CheckpointManager:
         self.dump_every = args.dump
         self.eval_every = args.eval
         self.init_ckpt_path = args.init_ckpt_path
-        self.continue_training_from_init = args.continue_training_from_init
 
         assert os.path.exists(self.path), f"Path {self.path} does not exist and needs to be created before using CheckpointManager (use instantiate_and_make_dir)"
 
