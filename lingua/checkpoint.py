@@ -59,6 +59,7 @@ class CheckpointArgs:
     eval: SaveEvery = field(default_factory=SaveEvery)
     path: Optional[str] = None
     init_ckpt_path: Optional[str] = None
+    load_init_optimizer_stages: bool = False
 
 
 def _get_key_step(name: str):

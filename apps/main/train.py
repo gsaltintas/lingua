@@ -274,16 +274,6 @@ def train(args: TrainArgs):
         # and buffers, otherwise you will have random values in the unitialized tensors
         # which will silently fail (give nan gradients for example)
 
-        if args.checkpoint.init_ckpt_path:
-            logger.info(f"Loading initial model from {args.checkpoint.init_ckpt_path}")
-            load_from_checkpoint(args.checkpoint.init_ckpt_path, model, model_key="model") # Put model_key="" if its directly the model checkpoint
-            model.rope_embeddings.reset_parameters() # For RoPe initialization since it's a buffer it might not be loaded
-        else:
-            with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
-                torch.manual_seed(args.model.seed)
-                model.init_weights()
-        check_model_value_range(model, range=10.0, std=1.0)
-
         # log model size
 
         logger.info(f"Model size: {model_param_count:,} total parameters")
@@ -297,6 +287,20 @@ def train(args: TrainArgs):
 
         # build optimizer after apply parallelisms to the model
         optimizer, scheduler = build_optimizer(model, args.optim, args.steps)
+
+        if args.checkpoint.init_ckpt_path:
+            logger.info(f"Loading initial model from {args.checkpoint.init_ckpt_path}")
+            if args.checkpoint.load_init_optimizer_state:
+                load_from_checkpoint(args.checkpoint.init_ckpt_path, model, optimizer, model_key="model") # Put model_key="" if its directly the model checkpoint
+            else:
+                load_from_checkpoint(args.checkpoint.init_ckpt_path, model, model_key="model") # Put model_key="" if its directly the model checkpoint
+            model.rope_embeddings.reset_parameters() # For RoPe initialization since it's a buffer it might not be loaded
+        else:
+            with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
+                torch.manual_seed(args.model.seed)
+                model.init_weights()
+        check_model_value_range(model, range=10.0, std=1.0)
+
         data_loader_state = init_dataloader_state_from_args(
             args.data, dp_rank, dp_degree
         )
