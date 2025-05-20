@@ -314,6 +314,16 @@ def train(args: TrainArgs):
 
         checkpoint = CheckpointManager.instantiate_and_make_dir(args.checkpoint)
         checkpoint.load(model, optimizer, train_state, world_mesh)
+
+        if args.checkpoint.save_init_ckpt:
+            _ = checkpoint.save(
+                model,
+                optimizer,
+                train_state,
+                args,
+                device_mesh=world_mesh,
+            )
+
         # Either load from latest checkpoint or start from scratch
         if args.probe_freq is not None:
             if get_is_master():

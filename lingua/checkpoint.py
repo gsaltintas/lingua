@@ -60,6 +60,7 @@ class CheckpointArgs:
     path: Optional[str] = None
     init_ckpt_path: Optional[str] = None
     load_init_optimizer_stages: bool = False
+    save_init_ckpt: bool = False
 
 
 def _get_key_step(name: str):
