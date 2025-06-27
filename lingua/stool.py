@@ -19,21 +19,24 @@ class StoolArgs:
     script: str = "apps.main.train"  # The script to run.
     copy_code: bool = True  # Wether to copy code to dump dir
     dirs_exists_ok: bool = (
-        False  # Wether to copy new code and config and run regardless that dir exists
+        True  # Wether to copy new code and config and run regardless that dir exists
     )
     override: bool = False  # Wether to delete dump dir and restart
-    nodes: int = -1  # The number of nodes to run the job on.
+    nodes: int = 8  # The number of nodes to run the job on.
     ngpu: int = 8  # The number of GPUs required per node.
-    ncpu: int = 16  # The number of CPUs allocated per GPU.
+    ncpu: int = 16  # The number of CPUs allocated per task.
     mem: str = ""  # The amount of memory to allocate.
     anaconda: str = "default"  # The path to the anaconda environment.
     constraint: str = ""  # The constraint on the nodes.
     exclude: str = ""  # The nodes to exclude.
-    time: int = -1  # The time limit of the job (in minutes).
+    time: int = 60000  # The time limit of the job (in minutes).
     account: str = ""
     qos: str = ""
-    partition: str = "learn"
+    partition: str = "hopper-prod"
     stdout: bool = False
+    priority: str = "normal"
+    # data_dir: str = "/fsx/craffel/common-pile-chunked/"
+    data_dir = str = "s3://common-pile-chunked/"
 
 
 SBATCH_COMMAND = """#!/bin/bash
@@ -44,18 +47,23 @@ SBATCH_COMMAND = """#!/bin/bash
 {constraint}
 #SBATCH --job-name={name}
 #SBATCH --nodes={nodes}
+#SBATCH --ntasks-per-node=1          # crucial - only 1 task per dist per node!
 #SBATCH --gres=gpu:{ngpus}
-#SBATCH --cpus-per-gpu={ncpu}
+#SBATCH --cpus-per-task={ncpu}
 #SBATCH --time={time}
 #SBATCH --partition={partition}
 #SBATCH --mem={mem}
+#SBATCH --qos={priority}
 
-#SBATCH --output={dump_dir}/logs/%j/%j.stdout
-#SBATCH --error={dump_dir}/logs/%j/%j.stderr
+#SBATCH --output={dump_dir}/logs/%j.stdout
+#SBATCH --error={dump_dir}/logs/%j.stderr
+
+#SBATCH --begin=now+0minutes
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=craffel@huggingface.co
+#SBATCH --requeue
 
 #SBATCH --open-mode=append
-#SBATCH --signal=USR2@120
-#SBATCH --distribution=block
 
 # Mimic the effect of "conda init", which doesn't work for scripts
 eval "$({conda_exe} shell.bash hook)"
@@ -66,6 +74,10 @@ source activate {conda_env_path}
 export OMP_NUM_THREADS=1
 export LAUNCH_WITH="SBATCH"
 export DUMP_DIR={dump_dir}
+export TMPDIR=/scratch
+
+{copy_data_command}
+
 srun {log_output} -n {tasks} -N {nodes_per_run} python -u -m {script} config=$DUMP_DIR/base_config.yaml
 """
 
@@ -154,6 +166,17 @@ def launch_job(args: StoolArgs):
     validate_args(args)
     dump_dir = args.config["dump_dir"]
     job_name = args.config["name"]
+
+    if "data" in args.config:
+        data_dir = args.data_dir
+        data_root_dir = args.config["data"]["root_dir"]
+        if data_dir.startswith("s3://"):
+            copy_data_command = f"srun --ntasks-per-node=1 s5cmd cp '{data_dir.removesuffix('/')}/*' {data_root_dir}/"
+        else:
+            copy_data_command = f"srun --ntasks-per-node=1 bash -c 'mkdir -p {data_root_dir} && rsync -arm {data_dir} {data_root_dir}'"
+    else:
+        copy_data_command = ""
+
     print("Creating directories...")
     os.makedirs(dump_dir, exist_ok=args.dirs_exists_ok or args.override)
     if args.override:
@@ -166,6 +189,7 @@ def launch_job(args: StoolArgs):
         else:
             print("Operation cancelled.")
             return
+    os.makedirs(os.path.join(dump_dir, "logs"), exist_ok=args.dirs_exists_ok)
     if args.copy_code:
         os.makedirs(f"{dump_dir}/code", exist_ok=args.dirs_exists_ok)
         print("Copying code ...")
@@ -178,7 +202,7 @@ def launch_job(args: StoolArgs):
     conda_exe = os.environ.get("CONDA_EXE", "conda")
     conda_env_path = os.path.dirname(os.path.dirname(args.anaconda))
     log_output = (
-        "-o $DUMP_DIR/logs/%j/%j_%t.out -e $DUMP_DIR/logs/%j/%j_%t.err"
+        "-o $DUMP_DIR/logs/%j_%t.out -e $DUMP_DIR/logs/%j_%t.err"
         if not args.stdout
         else ""
     )
@@ -202,6 +226,8 @@ def launch_job(args: StoolArgs):
         conda_env_path=conda_env_path,
         log_output=log_output,
         go_to_code_dir=f"cd {dump_dir}/code/" if args.copy_code else "",
+        priority=args.priority,
+        copy_data_command=copy_data_command,
     )
 
     print("Writing sbatch command ...")

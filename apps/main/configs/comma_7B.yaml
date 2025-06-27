@@ -1,6 +1,6 @@
 #python -m lingua.stool config=apps/main/configs/llama2_7B.yaml nodes=32 account=fair_amaia_cw_codegen qos=lowest
-dump_dir: /fsx/craffel/lingua_logs/llama7b_finewebedu/
-name: "7b_baseline"
+dump_dir: /fsx/craffel/lingua_logs/comma_v0p1/
+name: "comma_v0p1_yolooooo"
 steps: 500_000
 grad_acc_steps: 4
 
@@ -31,15 +31,44 @@ model:
 data:
   root_dir: /scratch/craffel/lingua/data/
   sources:
-    dclm_baseline_1.0: 1.0
-  batch_size: 2
+    peS2o: 0.274065475510351
+    stackexchange: 0.134617935796937
+    stackv2_edu: 0.127770669195666
+    cccc: 0.0871992270000557
+    wikimedia: 0.0861800315862719
+    github_archive: 0.0606452345122248
+    uspto: 0.0413469377516883
+    pubmed: 0.0367902799837971
+    arxiv_papers: 0.0292395449667613
+    caselaw_access_project: 0.0193875362722656
+    wikiteam: 0.0137485410839637
+    doab: 0.0180439781895451
+    uk_hansard: 0.0144498535570883
+    pre_1929_books: 0.0115755547988338
+    ubuntu_irc: 0.00794254267719456
+    regulations: 0.00762583706405442
+    data_provenance_initiative: 0.00512264496834867
+    project_gutenberg: 0.00502100654070129
+    youtube: 0.00465917165839394
+    arxiv_abstracts: 0.00359635066160403
+    stackv2_html: 0.00225924255952781
+    usgpo: 0.00226024581728848
+    library_of_congress: 0.00222469340783564
+    biodiversity_heritage_library: 0.00221737524370278
+    pressbooks: 0.000865101033213598
+    libretexts: 0.00054149556727006
+    news: 0.000372716196818104
+    foodista: 0.000125363443065615
+    oercommons: 0.0000778696843693821
+    python_enhancement_proposals: 0.0000169983991984805
+    public_domain_review: 0.0000105448719635173
   prefetch_size: 4096
   seq_len: 4096
   n_views: 2
   load_async: true
   tokenizer:
     name: tiktoken
-    path: /fsx/craffel/lingua/tokenizers/llama3.model
+    path: /fsx/craffel/lingua/tokenizers/common-pile-tokenizer.tiktoken
 
 profiling:
   run: true

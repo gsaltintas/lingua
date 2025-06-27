@@ -53,7 +53,6 @@ class LMHarnessArgs:
     apply_chat_template: Union[bool, str] = False
     fewshot_as_multiturn: bool = False
     gen_kwargs: Optional[str] = None
-    verbosity: str = "INFO"
     predict_only: bool = False
     random_seed: int = 0
     numpy_random_seed: int = 1234
@@ -77,7 +76,7 @@ class EvalArgs:
         default_factory=PackedCausalTransformerGeneratorArgs
     )
     harness: Optional[LMHarnessArgs] = field(default_factory=LMHarnessArgs)
-    validation: Optional[ValidationArgs] = field(default_factory=ValidationArgs)
+    validation: Optional[ValidationArgs] = None
 
     wandb: Optional[Any] = None
 
@@ -252,7 +251,7 @@ def launch_eval(cfg: EvalArgs):
         val_results = eval_on_val(generator, cfg.validation, train_cfg)
     if get_global_rank() == 0:
         with open(Path(cfg.dump_dir) / "results.json", "w") as f:
-            f.write(json.dumps(results))
+            f.write(json.dumps(results, default=lambda x: str(type(x))))
         logger.info(f"All evaluation results: {results['results']}")
         if val_results is not None:
             with open(Path(cfg.dump_dir) / "validation.json", "w") as f:
