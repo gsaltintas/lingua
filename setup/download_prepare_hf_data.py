@@ -1,13 +1,36 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 
 import argparse
+import gzip
 import math
 import os
 import subprocess
 import time
 
+import boto3
 import requests
+from botocore.exceptions import ClientError
+from datasets import load_dataset
 from huggingface_hub import snapshot_download
+
+num_proc = 16
+s3 = boto3.client("s3")
+bucket_name = "softwareheritage"
+
+
+def download_contents(blob_id):
+    key = f"content/{blob_id}"
+    try:
+        obj = s3.get_object(Bucket=bucket_name, Key=key)
+        with gzip.GzipFile(fileobj=obj["Body"]) as fin:
+            content = fin.read().decode("utf-8", errors="ignore")
+        return {"text": content, "download_success": True}
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "NoSuchKey":
+            print(f"File not found: {key}")
+            return {"text": "", "download_success": False}
+        else:
+            raise
 
 
 def run_command(command):
@@ -39,6 +62,67 @@ def download_dataset(repo_id, local_dir, allow_patterns):
     print(f"Dataset downloaded to {local_dir}")
 
 
+def gzip_to_jsonl(dataset, work_dir, src_dir, tgt_dir, ntasks=64, preserve_subsets=False):
+    from datatrove.executor import LocalPipelineExecutor
+    from datatrove.pipeline.readers import JsonlReader
+    from datatrove.pipeline.writers import JsonlWriter
+
+    if preserve_subsets:
+        subsets = os.listdir(f"{src_dir}")
+        pipe = []
+        for subset in subsets:
+            # skip the non data directories
+            if not os.path.isdir(f"{src_dir}/{subset}"):
+                continue
+            if subset in [".cache", ".git", ".github", "datatrove", "terashuf"]:
+                continue
+            print(f"Processing subset: {subset}")
+            # pipe.extend(
+            pipe = [
+                JsonlReader(
+                    f"{src_dir}/{subset}/",
+                    file_progress=True,
+                    doc_progress=True,
+                    glob_pattern="**/*.gz",
+                    compression="gzip",
+                ),
+                JsonlWriter(
+                    tgt_dir,
+                    output_filename=f"{dataset}.{subset}" + ".chunk.${rank}.jsonl",
+                    compression=None,
+                ),
+            ]
+            pipeline_exec = LocalPipelineExecutor(
+                pipeline=pipe,
+                tasks=ntasks,
+                logging_dir=os.path.join(work_dir, "datatrove", subset),
+                # skip_completed=False,
+            )
+            pipeline_exec.run()
+        return
+    else:
+        pipe = [
+            JsonlReader(
+                src_dir,
+                file_progress=True,
+                doc_progress=True,
+                glob_pattern="**/*.gz",
+                compression="gzip",
+            ),
+            JsonlWriter(
+                tgt_dir,
+                output_filename=dataset + ".chunk.${rank}.jsonl",
+                compression=None,
+            ),
+        ]
+
+    pipeline_exec = LocalPipelineExecutor(
+        pipeline=pipe, tasks=ntasks, logging_dir=os.path.join(work_dir, "datatrove")
+    )
+    pipeline_exec.run()
+
+
+
 def parquet_to_jsonl(
     dataset, work_dir, src_dir, tgt_dir, ntasks=64, preserve_subsets=False
 ):
@@ -47,14 +131,19 @@ def parquet_to_jsonl(
     from datatrove.pipeline.writers import JsonlWriter
 
     if preserve_subsets:
-        subsets = os.listdir(f"{src_dir}/data")
+        subsets = os.listdir(f"{src_dir}")
         pipe = []
         for subset in subsets:
+            # skip the non data directories
+            if not os.path.isdir(f"{src_dir}/{subset}"):
+                continue
+            if subset in [".cache", ".git", ".github", "datatrove", "terashuf"]:
+                continue
             print(f"Processing subset: {subset}")
             # pipe.extend(
             pipe = [
                 ParquetReader(
-                    f"{src_dir}/data/{subset}/",
+                    f"{src_dir}/{subset}/",
                     file_progress=True,
                     doc_progress=True,
                     glob_pattern="**/*.parquet",
@@ -112,6 +201,7 @@ def main(dataset, memory, data_dir, seed=42, nchunks=32, preserve_subsets=False)
     # Configuration
     repo_id = {
         "fineweb_edu": "HuggingFaceFW/fineweb-edu",
+        "stack_edu": "common-pile/stackv2_edu_filtered",
         "fineweb_2": "HuggingFaceFW/fineweb-2",
         "fineweb_2_hq": "epfml/FineWeb2-HQ",
         "fineweb_edu_10bt": "HuggingFaceFW/fineweb-edu",
@@ -123,9 +213,12 @@ def main(dataset, memory, data_dir, seed=42, nchunks=32, preserve_subsets=False)
     out_dir = f"{src_dir}_shuffled"
     os.makedirs(out_dir, exist_ok=True)
     work_dir = src_dir  # Directory of this Python file
+    if dataset not in ["fineweb_2_hq", "stack_edu"]:
+        src_dir = f"{src_dir}/data"
     prefix = f"{dataset}.chunk."
     orig_extension = {
         "fineweb_edu": ".jsonl",
+        "stack_edu": ".jsonl",
         "fineweb_2": ".jsonl",
         "fineweb_2_hq": ".jsonl",
         "fineweb_edu_10bt": ".jsonl",
@@ -135,6 +228,7 @@ def main(dataset, memory, data_dir, seed=42, nchunks=32, preserve_subsets=False)
     }[dataset]
     cat_command = {
         "fineweb_edu": "cat {}",
+        "stack_edu": "cat {}",
         "fineweb_2": "cat {}",
         "fineweb_2_hq": "cat {}",
         "fineweb_edu_10bt": "cat {}",
@@ -165,12 +259,13 @@ def main(dataset, memory, data_dir, seed=42, nchunks=32, preserve_subsets=False)
             "data/cmn_Hani/*/000_0000[012].parquet",
         ],
         "fineweb_2_hq": [
-            "eng_Latn/*",  # /000_0000[01].parquet",
-            "ita_Latn/*",  # /000_0000[01].parquet",
-            "tur_Latn/*",  # /000_0000[01].parquet",
-            "fas_Arab/*",  # /000_0000[01].parquet",
-            "cmn_Hani/*",  # /000_0000[012].parquet",
+            "eng_Latn/*",  
+            "ita_Latn/*",  
+            "tur_Latn/*",  
+            "fas_Arab/*",  
+            "cmn_Hani/*",  
         ],
+        "stack_edu": "*.json.gz",
         "dclm_baseline_1.0": "*.jsonl.zst",
         "dclm_baseline_1.0_10prct": "global-shard_01_of_10/*.jsonl.zst",
     }[dataset]
@@ -182,7 +277,9 @@ def main(dataset, memory, data_dir, seed=42, nchunks=32, preserve_subsets=False)
 
     # Download dataset
     download_dataset(repo_id, src_dir, allow_patterns)
-
+    if "stack" in dataset:
+        gzip_to_jsonl(dataset, work_dir, src_dir, src_dir, preserve_subsets=preserve_subsets)
+        orig_extension = ".jsonl"
     if "fineweb" in dataset:
         parquet_to_jsonl(
             dataset, work_dir, src_dir, src_dir, preserve_subsets=preserve_subsets
@@ -196,30 +293,40 @@ def main(dataset, memory, data_dir, seed=42, nchunks=32, preserve_subsets=False)
     terashuf_executable = os.path.join(terashuf_dir, "terashuf")
     print(orig_extension, src_dir, cat_command, terashuf_executable)
     if preserve_subsets:
-        for subset in os.listdir(f"{src_dir}/data"):
+        for subset in os.listdir(f"{src_dir}"):
+            # skip the non data directories
+            if not os.path.isdir(f"{src_dir}/{subset}"):
+                continue
+            if subset in [".cache", ".git", ".github", "datatrove", "terashuf"]:
+                continue
             prefix = f"{dataset}.{subset}.chunk."
             # Create validation set and remove lines from chunks
             validation_file = f"{out_dir}/{subset}/{dataset}.{subset}.val{suffix}"
+            run_command(f"mkdir -p {out_dir}/{subset} ")
+            run_command(f"ulimit -n 100000")
+            try:
+                run_command(
+                    f"find {src_dir} -type f -name '*{subset}*{orig_extension}' -print0 | xargs -0 -I {{}} sh -c '{cat_command}' | {terashuf_executable} | "
+                    f"split -n r/{nchunks} -d --suffix-length 2 --additional-suffix {suffix} - {out_dir}/{subset}/{prefix}"
+                    "; trap 'echo \"Caught signal 13, exiting with code 1\"; exit 1' PIPE;"
+                    # "; trap 'echo \"Caught signal 13, exiting with code 1\"; exit 1' SIGPIPE;"
+                )
+            except Exception as e:
+                print(f"Error: {e}")
+                import code
+
+                code.interact(local=dict(globals(), **locals()))
             for i in range(nchunks):
                 chunk_file = f"{out_dir}/{subset}/{prefix}{i:02d}{suffix}"
                 run_command(f"head -n {k_validation} {chunk_file} >> {validation_file}")
                 run_command(f"sed -i '1,{k_validation}d' {chunk_file}")
-            continue
-            if not ("cmn" in subset):
-                continue
-            run_command(
-                f"mkdir -p {out_dir}/{subset} && "
-                f"ulimit -n 100000 && "
-                f"find {src_dir} -type f -name '*{subset}*{orig_extension}' -print0 | xargs -0 -I {{}} sh -c '{cat_command}' | {terashuf_executable} | "
-                f"split -n r/{nchunks} -d --suffix-length 2 --additional-suffix {suffix} - {out_dir}/{subset}/{prefix}"
-                # "; trap 'echo \"Caught signal 13, exiting with code 1\"; exit 1' SIGPIPE;"
-            )
     else:
         run_command(
             f"ulimit -n 100000 && "
             f"find {src_dir} -type f -name '*{orig_extension}' -print0 | xargs -0 -I {{}} sh -c '{cat_command}' | {terashuf_executable} | "
             f"split -n r/{nchunks} -d --suffix-length 2 --additional-suffix {suffix} - {out_dir}/{prefix}"
-            "; trap 'echo \"Caught signal 13, exiting with code 1\"; exit 1' SIGPIPE;"
+            "; trap 'echo \"Caught signal 13, exiting with code 1\"; exit 1' PIPE;"
+            # "; trap 'echo \"Caught signal 13, exiting with code 1\"; exit 1' SIGPIPE;"
         )
 
         # Create validation set and remove lines from chunks
