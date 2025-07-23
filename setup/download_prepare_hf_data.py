@@ -10,8 +10,7 @@ import time
 import boto3
 import requests
 from botocore.exceptions import ClientError
-from datasets import load_dataset
-from huggingface_hub import snapshot_download
+from huggingface_hub import snapshot_download, HfApi
 
 num_proc = 16
 s3 = boto3.client("s3")
@@ -60,66 +59,6 @@ def download_dataset(repo_id, local_dir, allow_patterns):
             else:
                 raise
     print(f"Dataset downloaded to {local_dir}")
-
-
-def gzip_to_jsonl(dataset, work_dir, src_dir, tgt_dir, ntasks=64, preserve_subsets=False):
-    from datatrove.executor import LocalPipelineExecutor
-    from datatrove.pipeline.readers import JsonlReader
-    from datatrove.pipeline.writers import JsonlWriter
-
-    if preserve_subsets:
-        subsets = os.listdir(f"{src_dir}")
-        pipe = []
-        for subset in subsets:
-            # skip the non data directories
-            if not os.path.isdir(f"{src_dir}/{subset}"):
-                continue
-            if subset in [".cache", ".git", ".github", "datatrove", "terashuf"]:
-                continue
-            print(f"Processing subset: {subset}")
-            # pipe.extend(
-            pipe = [
-                JsonlReader(
-                    f"{src_dir}/{subset}/",
-                    file_progress=True,
-                    doc_progress=True,
-                    glob_pattern="**/*.gz",
-                    compression="gzip",
-                ),
-                JsonlWriter(
-                    tgt_dir,
-                    output_filename=f"{dataset}.{subset}" + ".chunk.${rank}.jsonl",
-                    compression=None,
-                ),
-            ]
-            pipeline_exec = LocalPipelineExecutor(
-                pipeline=pipe,
-                tasks=ntasks,
-                logging_dir=os.path.join(work_dir, "datatrove", subset),
-                # skip_completed=False,
-            )
-            pipeline_exec.run()
-        return
-    else:
-        pipe = [
-            JsonlReader(
-                src_dir,
-                file_progress=True,
-                doc_progress=True,
-                glob_pattern="**/*.gz",
-                compression="gzip",
-            ),
-            JsonlWriter(
-                tgt_dir,
-                output_filename=dataset + ".chunk.${rank}.jsonl",
-                compression=None,
-            ),
-        ]
-
-    pipeline_exec = LocalPipelineExecutor(
-        pipeline=pipe, tasks=ntasks, logging_dir=os.path.join(work_dir, "datatrove")
-    )
-    pipeline_exec.run()
 
 
 
@@ -196,8 +135,32 @@ def setup_terashuf(work_dir):
     run_command(f"make -C {terashuf_dir}")
     return terashuf_dir
 
+def upload_dataset_to_hf(dataset, out_dir, hf_path, preserve_subsets):
+    api = HfApi()
+    
+    if preserve_subsets:
+        for subset in os.listdir(f"{out_dir}"):
+            # skip the non data directories
+            if not os.path.isdir(f"{out_dir}/{subset}"):
+                continue
+            if subset in [".cache", ".git", ".github", "datatrove", "terashuf"]:
+                continue
+            api.upload_folder(
+                repo_id=hf_path,
+                folder_path=f"{out_dir}/{subset}",
+                repo_type="dataset",
+                path_in_repo=f"{subset}",
+                allow_patterns=["*.jsonl"],
+            )
+    else:
+        api.upload_folder(
+            repo_id=hf_path,
+            folder_path=f"{out_dir}",
+            repo_type="dataset",
+            allow_patterns=["*.jsonl"],
+        )
 
-def main(dataset, memory, data_dir, seed=42, nchunks=32, preserve_subsets=False):
+def main(dataset, memory, data_dir, seed=42, nchunks=32, preserve_subsets=False, upload_to_hf=False, hf_path=None, max_file_size=None, skip_download=False):
     # Configuration
     repo_id = {
         "fineweb_edu": "HuggingFaceFW/fineweb-edu",
@@ -218,7 +181,7 @@ def main(dataset, memory, data_dir, seed=42, nchunks=32, preserve_subsets=False)
     prefix = f"{dataset}.chunk."
     orig_extension = {
         "fineweb_edu": ".jsonl",
-        "stack_edu": ".jsonl",
+        "stack_edu": ".json.gz",
         "fineweb_2": ".jsonl",
         "fineweb_2_hq": ".jsonl",
         "fineweb_edu_10bt": ".jsonl",
@@ -228,11 +191,11 @@ def main(dataset, memory, data_dir, seed=42, nchunks=32, preserve_subsets=False)
     }[dataset]
     cat_command = {
         "fineweb_edu": "cat {}",
-        "stack_edu": "cat {}",
         "fineweb_2": "cat {}",
         "fineweb_2_hq": "cat {}",
         "fineweb_edu_10bt": "cat {}",
         "fineweb_edu_100bt": "cat {}",
+        "stack_edu": "zcat {} && echo",
         "dclm_baseline_1.0": "zstdcat {} && echo",
         "dclm_baseline_1.0_10prct": "zstdcat {} && echo",
     }[dataset]
@@ -259,11 +222,10 @@ def main(dataset, memory, data_dir, seed=42, nchunks=32, preserve_subsets=False)
             "data/cmn_Hani/*/000_0000[012].parquet",
         ],
         "fineweb_2_hq": [
-            "eng_Latn/*",  
             "ita_Latn/*",  
-            "tur_Latn/*",  
-            "fas_Arab/*",  
-            "cmn_Hani/*",  
+            # "tur_Latn/*",  
+            # "fas_Arab/*",  
+            # "cmn_Hani/*",  
         ],
         "stack_edu": "*.json.gz",
         "dclm_baseline_1.0": "*.jsonl.zst",
@@ -276,10 +238,12 @@ def main(dataset, memory, data_dir, seed=42, nchunks=32, preserve_subsets=False)
     terashuf_dir = setup_terashuf(work_dir)
 
     # Download dataset
-    download_dataset(repo_id, src_dir, allow_patterns)
-    if "stack" in dataset:
-        gzip_to_jsonl(dataset, work_dir, src_dir, src_dir, preserve_subsets=preserve_subsets)
+    if not skip_download:
+        download_dataset(repo_id, src_dir, allow_patterns)
+    else:
         orig_extension = ".jsonl"
+        print("Skipping download of dataset, make sure the dataset or jsonl files are present in the data directory")
+
     if "fineweb" in dataset:
         parquet_to_jsonl(
             dataset, work_dir, src_dir, src_dir, preserve_subsets=preserve_subsets
@@ -292,6 +256,7 @@ def main(dataset, memory, data_dir, seed=42, nchunks=32, preserve_subsets=False)
     # Run the original shuffling and splitting command
     terashuf_executable = os.path.join(terashuf_dir, "terashuf")
     print(orig_extension, src_dir, cat_command, terashuf_executable)
+    
     if preserve_subsets:
         for subset in os.listdir(f"{src_dir}"):
             # skip the non data directories
@@ -304,27 +269,22 @@ def main(dataset, memory, data_dir, seed=42, nchunks=32, preserve_subsets=False)
             validation_file = f"{out_dir}/{subset}/{dataset}.{subset}.val{suffix}"
             run_command(f"mkdir -p {out_dir}/{subset} ")
             run_command(f"ulimit -n 100000")
-            try:
-                run_command(
+            run_command(
                     f"find {src_dir} -type f -name '*{subset}*{orig_extension}' -print0 | xargs -0 -I {{}} sh -c '{cat_command}' | {terashuf_executable} | "
-                    f"split -n r/{nchunks} -d --suffix-length 2 --additional-suffix {suffix} - {out_dir}/{subset}/{prefix}"
+                    f" split -n l/{nchunks}  -d --suffix-length 2 --additional-suffix {suffix} - {out_dir}/{subset}/{prefix}"
                     "; trap 'echo \"Caught signal 13, exiting with code 1\"; exit 1' PIPE;"
-                    # "; trap 'echo \"Caught signal 13, exiting with code 1\"; exit 1' SIGPIPE;"
                 )
-            except Exception as e:
-                print(f"Error: {e}")
-                import code
-
-                code.interact(local=dict(globals(), **locals()))
             for i in range(nchunks):
                 chunk_file = f"{out_dir}/{subset}/{prefix}{i:02d}{suffix}"
                 run_command(f"head -n {k_validation} {chunk_file} >> {validation_file}")
                 run_command(f"sed -i '1,{k_validation}d' {chunk_file}")
+                if max_file_size:
+                    run_command(f"truncate -s {max_file_size} {chunk_file}")
     else:
         run_command(
             f"ulimit -n 100000 && "
             f"find {src_dir} -type f -name '*{orig_extension}' -print0 | xargs -0 -I {{}} sh -c '{cat_command}' | {terashuf_executable} | "
-            f"split -n r/{nchunks} -d --suffix-length 2 --additional-suffix {suffix} - {out_dir}/{prefix}"
+            f" split -n l/{nchunks}  -d --suffix-length 2 --additional-suffix {suffix} - {out_dir}/{prefix}"
             "; trap 'echo \"Caught signal 13, exiting with code 1\"; exit 1' PIPE;"
             # "; trap 'echo \"Caught signal 13, exiting with code 1\"; exit 1' SIGPIPE;"
         )
@@ -335,8 +295,13 @@ def main(dataset, memory, data_dir, seed=42, nchunks=32, preserve_subsets=False)
             chunk_file = f"{out_dir}/{prefix}{i:02d}{suffix}"
             run_command(f"head -n {k_validation} {chunk_file} >> {validation_file}")
             run_command(f"sed -i '1,{k_validation}d' {chunk_file}")
+            if max_file_size:
+                run_command(f"truncate -s {max_file_size} {chunk_file}")
 
     print("All tasks completed successfully!")
+    if upload_to_hf:
+        print("Uploading to Hugging Face...")
+        upload_dataset_to_hf(dataset, out_dir, hf_path, preserve_subsets)
 
 
 if __name__ == "__main__":
@@ -346,14 +311,31 @@ if __name__ == "__main__":
     parser.add_argument("--data_dir", type=str, default="data")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--nchunks", type=int, default=32)
+    parser.add_argument("--max_file_size", type=str, default=None, help="If specified, the dataset will be truncated to match this file size, e.g. 45G")
     parser.add_argument(
         "--preserve_subsets",
         action="store_true",
         default=False,
         help="If true, the subsets will be preserved in the output directory",
     )
-
+    parser.add_argument("--upload_to_hf", action="store_true", default=False)
+    parser.add_argument("--hf_path", type=str, default=None)
+    parser.add_argument("--skip_download", action="store_true", default=False)
     args = parser.parse_args()
+    if args.upload_to_hf:
+        if args.hf_path is None:
+            raise ValueError("hf_path is required when upload_to_hf is true")
+        # try:
+        #     api = HfApi()
+        #     if not api.repo_exists(args.hf_path):
+        #         api.create_repo(args.hf_path, repo_type="dataset")
+        #     else:
+        #         print(f"Repository {args.hf_path} already exists, skipping creation")
+        # except Exception as e:
+        #     print(f"Error creating repository: {e}")
+        #     print("Please ensure you have the correct permissions to create the repository.")
+        #     raise
+        
 
     main(
         args.dataset,
@@ -362,4 +344,8 @@ if __name__ == "__main__":
         args.seed,
         args.nchunks,
         args.preserve_subsets,
+        args.upload_to_hf,
+        args.hf_path,
+        args.max_file_size,
+        args.skip_download,
     )
